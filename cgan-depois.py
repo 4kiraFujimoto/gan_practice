@@ -146,6 +146,7 @@ def write_0to9(netG, n_rows=1, size=64):
     img_counter += 1
 
 def write_specific_number(netG, numbers_of_images:int = 1000, label:int = 0 ) -> None:
+    global augmented_img_counter
     netG.eval()
     z = make_noise(torch.tensor([label]*numbers_of_images))
     gen_images = netG(z)
@@ -155,10 +156,20 @@ def write_specific_number(netG, numbers_of_images:int = 1000, label:int = 0 ) ->
     to_pil = transforms.ToPILImage()
     for i in range(numbers_of_images):
         img = to_pil(gen_images[i])  # TensorをPIL Imageに変換
-        img.save(f"{save_dir}/generated_image_{i}.png")  # 画像をPNG形式で保存
+        img.save(f"{save_dir}/generated_image_{augmented_img_counter}.png")  # 画像をPNG形式で保存
+        augmented_img_counter += 1
         # print(image.shape)
 
 
+# 画像読み込み用の関数
+def load_generated_images(path):
+    transform = transforms.ToTensor()  # PIL画像をTensorに変換
+    images = []
+    for img_path in glob.glob(f"{path}/*.png"):
+        img = Image.open(img_path)  # 画像を開く
+        img_tensor = transform(img)  # Tensorに変換
+        images.append(img_tensor)
+    return torch.stack(images)
 
 # 間違ったラベルの生成
 def make_false_labels(labels):
@@ -167,7 +178,7 @@ def make_false_labels(labels):
     return fake_labels
 
 
-def train(netD, netG, netL, optimD, optimG, optimL, n_epochs, write_interval=1):
+def train(dataloader, netD, netG, netL, optimD, optimG, optimL, n_epochs, write_interval=1):
     # 学習モード
     netD.train()
     netG.train()
@@ -230,128 +241,191 @@ def train(netD, netG, netL, optimD, optimG, optimL, n_epochs, write_interval=1):
 
 
 ##main関数###
+if __name__ == "__main__":
+    batch_size = 64
+    nz = 100
+    noise_std = 0.7
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
+    print(f"device = {device}")
 
-# faulthandler.enable()
-batch_size = 64
-nz = 100
-noise_std = 0.7
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# device = torch.device("cpu")
-print(f"device = {device}")
+    dataset = MNIST(root="data", train=True, download=True, transform=transforms.ToTensor())
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-dataset = MNIST(root="data", train=True, download=True, transform=transforms.ToTensor())
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    sample_x, _ = next(iter(dataloader))
+    n_classes = len(torch.unique(dataset.targets)) # 10
+    w, h = sample_x.shape[-2:]                     # (28, 28)
+    image_size = w * h                             # 784
 
-sample_x, _ = next(iter(dataloader))
-n_classes = len(torch.unique(dataset.targets)) # 10
-w, h = sample_x.shape[-2:]                     # (28, 28)
-image_size = w * h                             # 784
+    eye = torch.eye(n_classes, device=device)
 
-eye = torch.eye(n_classes, device=device)
+    fake_labels = torch.zeros(batch_size, 1).to(device) # 偽物のラベル
+    real_labels = torch.ones(batch_size, 1).to(device) # 本物のラベル
+    criterion = nn.BCELoss() # バイナリ交差エントロピー BCEと違って、CrossEntropyLossは内部でsigmoid関数がかけられるので、生データそのまま入れれる。
 
-fake_labels = torch.zeros(batch_size, 1).to(device) # 偽物のラベル
-real_labels = torch.ones(batch_size, 1).to(device) # 本物のラベル
-criterion = nn.BCELoss() # バイナリ交差エントロピー BCEと違って、CrossEntropyLossは内部でsigmoid関数がかけられるので、生データそのまま入れれる。
-
-netD = Discriminator(img_shape=784, num_classes=10).to(device)
-netG = Generator().to(device)
-netL = LeNet().to(device) #authenticator
-optimD = optim.Adam(netD.parameters(), lr=0.0002)
-optimG = optim.Adam(netG.parameters(), lr=0.0002)
-optimL = optim.Adam(netL.parameters(), lr=0.0002)
-n_epochs = 5
+    netD = Discriminator(img_shape=784, num_classes=10).to(device)
+    netG = Generator().to(device)
+    netL = LeNet().to(device) #authenticator
+    optimD = optim.Adam(netD.parameters(), lr=0.0002)
+    optimG = optim.Adam(netG.parameters(), lr=0.0002)
+    optimL = optim.Adam(netL.parameters(), lr=0.0002)
+    n_epochs = 5
 
 
-##画像用
-folder_name = "cgan_images"# フォルダ名
-current_directory = os.getcwd()# 現在のディレクトリを取得
-folder_path = os.path.join(current_directory, folder_name)# フォルダのパスを作成
-if not os.path.exists(folder_path):# フォルダが存在しない場合は作成する
-    os.makedirs(folder_path)
-    print(f"'{folder_name}' フォルダを作成しました。")
-else:
-    print(f"'{folder_name}' フォルダはすでに存在します。")
-img_counter = 0 # グローバルカウンタ（初期値は0）
+    ##画像用
+    folder_name = "cgan_images"# フォルダ名
+    current_directory = os.getcwd()# 現在のディレクトリを取得
+    folder_path = os.path.join(current_directory, folder_name)# フォルダのパスを作成
+    if not os.path.exists(folder_path):# フォルダが存在しない場合は作成する
+        os.makedirs(folder_path)
+        print(f"'{folder_name}' フォルダを作成しました。")
+    else:
+        print(f"'{folder_name}' フォルダはすでに存在します。")
+    img_counter = 0 # グローバルカウンタ（初期値は0）
 
-# 画像読み込み用の関数
-def load_generated_images(path):
-    transform = transforms.ToTensor()  # PIL画像をTensorに変換
-    images = []
-    for img_path in glob.glob(f"{path}/*.png"):
-        img = Image.open(img_path)  # 画像を開く
-        img_tensor = transform(img)  # Tensorに変換
-        images.append(img_tensor)
-    return torch.stack(images)
-
-print('初期状態')
-write_0to9(netG)
-DO_TRAIN = False
-if DO_TRAIN:
-    train(netD, netG, netL, optimD, optimG, optimL, n_epochs)
-    write_specific_number(netG, numbers_of_images=1000, label=0)
-
-else:
-    numbers_of_images = 1000
-    netG = torch.load("netG_parameter")
-    netD = torch.load("netD_parameter")
-    write_0to9(netG)
-    write_specific_number(netG, numbers_of_images=1000, label=0)
-    # 保存された画像をロード
-    loaded_images = load_generated_images('./cgan_generated_images')
-    print(f"loaded_imagesの形状：{loaded_images.shape}")
-
-    # MNISTのデータセットをロード
-    mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
-    # MNISTの画像と生成した画像を結合
-    mnist_images, mnist_labels = mnist_dataset.data.float(), mnist_dataset.targets
-    print(f"mnist_imagesの形状：{mnist_images.shape}")
-    print(f"mnist_images.unsqueezeの形状：{mnist_images.unsqueeze(1).shape}")
-    combined_images = torch.cat((mnist_images.unsqueeze(1), loaded_images), 0)  # 画像を結合
-    print(f"combined_imagesの形状：{combined_images.shape}")
-    combined_labels = torch.cat((mnist_labels, torch.full((numbers_of_images,), 0)))  # 生成画像のラベルを"10"とする
-
-    # データセットを結合後のものに更新
-    combined_dataset = TensorDataset(combined_images, combined_labels)
-    combined_loader = DataLoader(combined_dataset, batch_size=64, shuffle=True)    
     
 
-# GIFアニメーションを作成
-def create_gif(in_dir, out_filename):
-    path_list = sorted(glob.glob(os.path.join(*[in_dir, '*']))) # ファイルパスをソートしてリストする
-    imgs = []                                                   # 画像をappendするための空配列を定義
- 
-    # ファイルのフルパスからファイル名と拡張子を抽出
-    for i in range(len(path_list)):
-        img = Image.open(path_list[i])                          # 画像ファイルを1つずつ開く
-        imgs.append(img)                                        # 画像をappendで配列に格納していく
- 
-    # appendした画像配列をGIFにする。durationで持続時間、loopでループ数を指定可能。
-    imgs[0].save(out_filename,
-                 save_all=True, append_images=imgs[1:], optimize=False, duration=100, loop=0)
- 
-create_gif(in_dir='/home/fujimoto-a/research/ganpra/cgan_images', out_filename='/home/fujimoto-a/research/ganpra/cgan_images_gif/animation.gif') # GIFアニメーションを作成する関数を実行する
+    print('初期状態')
+    write_0to9(netG)
+    DO_TRAIN = False
+    if DO_TRAIN:
+        mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
+        
+        # 3と7だけをフィルタリング
+        def filter_mnist(dataset, labels_to_keep):
+            indices = torch.where(torch.isin(dataset.targets, torch.tensor(labels_to_keep)))[0] #torch.where(condition) is identical to torch.nonzero(condition, as_tuple=True).
+            filtered_data = torch.utils.data.Subset(dataset, indices)
+            return filtered_data
+        
+        # ラベル 3 と 7 だけを抽出
+        labels_to_keep = [3, 7]
+        mnist_dataset = filter_mnist(mnist_dataset, labels_to_keep)
+
+        # サブセットからデータとラベルを取得
+        data = torch.stack([mnist_dataset[i][0] for i in range(len(mnist_dataset))])
+        labels = torch.tensor([mnist_dataset[i][1] for i in range(len(mnist_dataset))])
+
+        # データとラベルをシャッフル
+        perm = torch.randperm(len(data))
+        data = data[perm]
+        labels = labels[perm]
+
+        # 末尾10%を攻撃用に分離
+        num_samples = len(labels)
+        attack_split_idx = int(0.9 * num_samples)
+
+        # 最初の90%と末尾10%を分離
+        data, attack_data = data[:attack_split_idx], data[attack_split_idx:]
+        labels, attack_labels = labels[:attack_split_idx], labels[attack_split_idx:]
+
+        # 末尾10%のラベルを反転
+        attack_labels = torch.where(attack_labels == 3, 7, 3)
+
+        # 最初の90%を50%と40%に分離 (40%をクリーンデータとする。)
+        num_samples = len(labels)
+        clean_split_idx = int(0.5 * num_samples)
+        data, clean_data = data[:clean_split_idx], data[clean_split_idx : attack_split_idx]
+        labels, clean_labels = labels[:clean_split_idx], labels[clean_split_idx : attack_split_idx]
 
 
-##test lenet
-# # 損失関数とオプティマイザの定義
-# criterion = nn.CrossEntropyLoss()
-# optimizer = optim.SGD(netL.parameters(), lr=0.01, momentum=0.9)
-# # ダミーデータの作成
-# dummy_input = torch.randn(4, 1, 28, 28).to(device)  # バッチサイズ4、チャンネル1、28x28ピクセルのダミーデータ
-# dummy_labels = torch.randint(0, 10, (4,)).to(device)  # バッチサイズ4のダミーラベル（0から9のクラス）
+        _ = torch.utils.data.TensorDataset(data, labels)
+        clean_dataset = torch.utils.data.TensorDataset(clean_data, clean_labels)
+        attack_dataset = torch.utils.data.TensorDataset(attack_data, attack_labels)
+        clean_dataloader = DataLoader(clean_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+        attack_dataloader = DataLoader(attack_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-# # 学習ループ
-# num_epochs = 10
-# for epoch in range(num_epochs):
-#     netL.train()  # 学習モード
-#     optimizer.zero_grad()  # 勾配の初期化
+        train(clean_dataloader, netD, netG, netL, optimD, optimG, optimL, n_epochs)
+        # write_specific_number(netG, numbers_of_images=1000, label=0)
+        
+    else:
+        numbers_of_images = 1000
+        netG = torch.load("netG_parameter")
+        netD = torch.load("netD_parameter")
+        
+        # write_0to9(netG)
+        # MNISTのデータセットをロード
+        mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
+        
+        # 3と7だけをフィルタリング
+        def filter_mnist(dataset, labels_to_keep):
+            indices = torch.where(torch.isin(dataset.targets, torch.tensor(labels_to_keep)))[0] #torch.where(condition) is identical to torch.nonzero(condition, as_tuple=True).
+            # filtered_data = torch.utils.data.Subset(dataset, indices)
+            dataset.targets = dataset.targets[indices]  # ラベルをフィルタリング
+            dataset.data = dataset.data[indices]        # データをフィルタリング
+            return dataset
+            return filtered_data
+        
+        # ラベル 3 と 7 だけを抽出
+        labels_to_keep = [3, 7]
+        mnist_dataset = filter_mnist(mnist_dataset, labels_to_keep)
+        # test_filtered = filter_mnist(mnist_test, labels_to_keep)
 
-#     # フォワードプロパゲーション
-#     outputs = netL(dummy_input)
-#     loss = criterion(outputs, dummy_labels)
 
-#     # バックプロパゲーション
-#     loss.backward()
-#     optimizer.step()
 
-#     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+        #データ生成
+        augmented_img_counter = 0
+        write_specific_number(netG, numbers_of_images=500, label=3)
+        write_specific_number(netG, numbers_of_images=500, label=7)
+
+
+        # 保存された画像をロード
+        loaded_images = load_generated_images('./cgan_generated_images')
+        print(f"loaded_imagesの形状：{loaded_images.shape}")
+        
+        # MNISTの画像と生成した画像を結合
+        mnist_images, mnist_labels = mnist_dataset.data.float(), mnist_dataset.targets
+        print(f"mnist_imagesの形状：{mnist_images.shape}")
+        print(f"mnist_images.unsqueezeの形状：{mnist_images.unsqueeze(1).shape}")
+        combined_images = torch.cat((mnist_images.unsqueeze(1), loaded_images), 0)  # 画像を結合
+        print(f"combined_imagesの形状：{combined_images.shape}")
+        combined_labels = torch.cat((mnist_labels, torch.full((numbers_of_images,), 0)))  # 生成画像のラベルを"0"とする
+        # print(combined_labels[-10:])
+
+
+        ##combined_imagesとcombined_labelsを保存して、wgangpで呼び出せるようにする。
+
+        # データセットを結合後のものに更新
+        combined_dataset = TensorDataset(combined_images, combined_labels)
+        combined_loader = DataLoader(combined_dataset, batch_size=64, shuffle=True)    
+        
+
+    # GIFアニメーションを作成
+    def create_gif(in_dir, out_filename):
+        path_list = sorted(glob.glob(os.path.join(*[in_dir, '*']))) # ファイルパスをソートしてリストする
+        imgs = []                                                   # 画像をappendするための空配列を定義
+    
+        # ファイルのフルパスからファイル名と拡張子を抽出
+        for i in range(len(path_list)):
+            img = Image.open(path_list[i])                          # 画像ファイルを1つずつ開く
+            imgs.append(img)                                        # 画像をappendで配列に格納していく
+    
+        # appendした画像配列をGIFにする。durationで持続時間、loopでループ数を指定可能。
+        imgs[0].save(out_filename,
+                    save_all=True, append_images=imgs[1:], optimize=False, duration=100, loop=0)
+    
+    create_gif(in_dir='/home/fujimoto-a/research/ganpra/cgan_images', out_filename='/home/fujimoto-a/research/ganpra/cgan_images_gif/animation.gif') # GIFアニメーションを作成する関数を実行する
+
+
+    ##test lenet
+    # # 損失関数とオプティマイザの定義
+    # criterion = nn.CrossEntropyLoss()
+    # optimizer = optim.SGD(netL.parameters(), lr=0.01, momentum=0.9)
+    # # ダミーデータの作成
+    # dummy_input = torch.randn(4, 1, 28, 28).to(device)  # バッチサイズ4、チャンネル1、28x28ピクセルのダミーデータ
+    # dummy_labels = torch.randint(0, 10, (4,)).to(device)  # バッチサイズ4のダミーラベル（0から9のクラス）
+
+    # # 学習ループ
+    # num_epochs = 10
+    # for epoch in range(num_epochs):
+    #     netL.train()  # 学習モード
+    #     optimizer.zero_grad()  # 勾配の初期化
+
+    #     # フォワードプロパゲーション
+    #     outputs = netL(dummy_input)
+    #     loss = criterion(outputs, dummy_labels)
+
+    #     # バックプロパゲーション
+    #     loss.backward()
+    #     optimizer.step()
+
+    #     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
