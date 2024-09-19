@@ -1,0 +1,12 @@
+data/
+cgan_images/
+cgan_images_gif/
+gan_images/
+venv/
+cnn.py
+dccgan.py
+dcgan_tensorflow.py
+lenet.py
+out.jpg
+requirements.txt
+wgan_images/
