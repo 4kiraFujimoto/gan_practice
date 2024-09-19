@@ -10,3 +10,6 @@ lenet.py
 out.jpg
 requirements.txt
 wgan_images/
+cgan_generated_images/
+netD_parameter
+netG_parameter

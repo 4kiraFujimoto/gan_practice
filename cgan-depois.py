@@ -1,6 +1,6 @@
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 import torchvision
 from torchvision.datasets import MNIST
 from torchvision import transforms
@@ -131,7 +131,8 @@ def make_noise(labels):
     return z
 
 # 画像描画
-def write(netG, n_rows=1, size=64):
+def write_0to9(netG, n_rows=1, size=64):
+    netG.eval()
     global img_counter
     n_images = n_rows * n_classes
     z = make_noise(torch.tensor(list(range(n_classes)) * n_rows))
@@ -144,6 +145,21 @@ def write(netG, n_rows=1, size=64):
     img.save(file_path)
     img_counter += 1
 
+def write_specific_number(netG, numbers_of_images:int = 1000, label:int = 0 ) -> None:
+    netG.eval()
+    z = make_noise(torch.tensor([label]*numbers_of_images))
+    gen_images = netG(z)
+    gen_images = gen_images.view(numbers_of_images,1,28,28)
+    save_dir = './cgan_generated_images'
+    os.makedirs(save_dir, exist_ok=True)
+    to_pil = transforms.ToPILImage()
+    for i in range(numbers_of_images):
+        img = to_pil(gen_images[i])  # TensorをPIL Imageに変換
+        img.save(f"{save_dir}/generated_image_{i}.png")  # 画像をPNG形式で保存
+        # print(image.shape)
+
+
+
 # 間違ったラベルの生成
 def make_false_labels(labels):
     diff = torch.randint(1, n_classes, size=labels.size(), device=device)
@@ -153,7 +169,6 @@ def make_false_labels(labels):
 
 def train(netD, netG, netL, optimD, optimG, optimL, n_epochs, write_interval=1):
     # 学習モード
-    
     netD.train()
     netG.train()
     netL.train()
@@ -204,7 +219,13 @@ def train(netD, netG, netL, optimD, optimG, optimL, n_epochs, write_interval=1):
 
         print(f'{epoch:>3}epoch | lossD: {lossD:.4f}, lossG: {lossG:.4f}')
         if write_interval and epoch % write_interval == 0:
-            write(netG)
+            write_0to9(netG)
+
+    #preserve model parameter
+    torch.save(netG, "netG_parameter")
+    torch.save(netD, "netD_parameter")
+    
+
 
 
 
@@ -216,34 +237,21 @@ nz = 100
 noise_std = 0.7
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = torch.device("cpu")
-print(device)
-dataset = MNIST(
-    root="data",
-    train=True,
-    download=True,
-    transform=transforms.ToTensor()
-)
+print(f"device = {device}")
 
-dataloader = DataLoader(
-    dataset,
-    batch_size=batch_size,
-    shuffle=True,
-    drop_last=True
-)
+dataset = MNIST(root="data", train=True, download=True, transform=transforms.ToTensor())
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
 sample_x, _ = next(iter(dataloader))
 n_classes = len(torch.unique(dataset.targets)) # 10
 w, h = sample_x.shape[-2:]                     # (28, 28)
 image_size = w * h                             # 784
 
-
 eye = torch.eye(n_classes, device=device)
-
 
 fake_labels = torch.zeros(batch_size, 1).to(device) # 偽物のラベル
 real_labels = torch.ones(batch_size, 1).to(device) # 本物のラベル
 criterion = nn.BCELoss() # バイナリ交差エントロピー BCEと違って、CrossEntropyLossは内部でsigmoid関数がかけられるので、生データそのまま入れれる。
-
 
 netD = Discriminator(img_shape=784, num_classes=10).to(device)
 netG = Generator().to(device)
@@ -251,7 +259,7 @@ netL = LeNet().to(device) #authenticator
 optimD = optim.Adam(netD.parameters(), lr=0.0002)
 optimG = optim.Adam(netG.parameters(), lr=0.0002)
 optimL = optim.Adam(netL.parameters(), lr=0.0002)
-n_epochs = 100
+n_epochs = 5
 
 
 ##画像用
@@ -265,11 +273,47 @@ else:
     print(f"'{folder_name}' フォルダはすでに存在します。")
 img_counter = 0 # グローバルカウンタ（初期値は0）
 
+# 画像読み込み用の関数
+def load_generated_images(path):
+    transform = transforms.ToTensor()  # PIL画像をTensorに変換
+    images = []
+    for img_path in glob.glob(f"{path}/*.png"):
+        img = Image.open(img_path)  # 画像を開く
+        img_tensor = transform(img)  # Tensorに変換
+        images.append(img_tensor)
+    return torch.stack(images)
 
 print('初期状態')
-write(netG)
-train(netD, netG, netL, optimD, optimG, optimL, n_epochs)
+write_0to9(netG)
+DO_TRAIN = False
+if DO_TRAIN:
+    train(netD, netG, netL, optimD, optimG, optimL, n_epochs)
+    write_specific_number(netG, numbers_of_images=1000, label=0)
 
+else:
+    numbers_of_images = 1000
+    netG = torch.load("netG_parameter")
+    netD = torch.load("netD_parameter")
+    write_0to9(netG)
+    write_specific_number(netG, numbers_of_images=1000, label=0)
+    # 保存された画像をロード
+    loaded_images = load_generated_images('./cgan_generated_images')
+    print(f"loaded_imagesの形状：{loaded_images.shape}")
+
+    # MNISTのデータセットをロード
+    mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
+    # MNISTの画像と生成した画像を結合
+    mnist_images, mnist_labels = mnist_dataset.data.float(), mnist_dataset.targets
+    print(f"mnist_imagesの形状：{mnist_images.shape}")
+    print(f"mnist_images.unsqueezeの形状：{mnist_images.unsqueeze(1).shape}")
+    combined_images = torch.cat((mnist_images.unsqueeze(1), loaded_images), 0)  # 画像を結合
+    print(f"combined_imagesの形状：{combined_images.shape}")
+    combined_labels = torch.cat((mnist_labels, torch.full((numbers_of_images,), 0)))  # 生成画像のラベルを"10"とする
+
+    # データセットを結合後のものに更新
+    combined_dataset = TensorDataset(combined_images, combined_labels)
+    combined_loader = DataLoader(combined_dataset, batch_size=64, shuffle=True)    
+    
 
 # GIFアニメーションを作成
 def create_gif(in_dir, out_filename):
