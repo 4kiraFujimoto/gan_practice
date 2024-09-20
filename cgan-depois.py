@@ -269,7 +269,7 @@ if __name__ == "__main__":
     optimD = optim.Adam(netD.parameters(), lr=0.0002)
     optimG = optim.Adam(netG.parameters(), lr=0.0002)
     optimL = optim.Adam(netL.parameters(), lr=0.0002)
-    n_epochs = 5
+    n_epochs = 1000
 
 
     ##画像用
@@ -287,7 +287,7 @@ if __name__ == "__main__":
 
     print('初期状態')
     write_0to9(netG)
-    DO_TRAIN = False
+    DO_TRAIN = True
     if DO_TRAIN:
         mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
         
@@ -298,7 +298,8 @@ if __name__ == "__main__":
             return filtered_data
         
         # ラベル 3 と 7 だけを抽出
-        labels_to_keep = [3, 7]
+        # labels_to_keep = [0,1,2,3,4,5 ]
+        labels_to_keep = [0,1,2,3,4,5,6,7,8,9]
         mnist_dataset = filter_mnist(mnist_dataset, labels_to_keep)
 
         # サブセットからデータとラベルを取得
@@ -319,11 +320,13 @@ if __name__ == "__main__":
         labels, attack_labels = labels[:attack_split_idx], labels[attack_split_idx:]
 
         # 末尾10%のラベルを反転
-        attack_labels = torch.where(attack_labels == 3, 7, 3)
+        attack_labels = torch.where(attack_labels == 3, 4, 3)
 
         # 最初の90%を50%と40%に分離 (40%をクリーンデータとする。)
         num_samples = len(labels)
         clean_split_idx = int(0.5 * num_samples)
+        clean_split_idx = 1
+        
         data, clean_data = data[:clean_split_idx], data[clean_split_idx : attack_split_idx]
         labels, clean_labels = labels[:clean_split_idx], labels[clean_split_idx : attack_split_idx]
 
@@ -335,6 +338,7 @@ if __name__ == "__main__":
         attack_dataloader = DataLoader(attack_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
         train(clean_dataloader, netD, netG, netL, optimD, optimG, optimL, n_epochs)
+        print("netD, netGのパラメータを保存しました。(ファイル名：netD_parameter, netG_parameter)")
         # write_specific_number(netG, numbers_of_images=1000, label=0)
         
     else:
@@ -370,24 +374,23 @@ if __name__ == "__main__":
 
         # 保存された画像をロード
         loaded_images = load_generated_images('./cgan_generated_images')
-        print(f"loaded_imagesの形状：{loaded_images.shape}")
+        # print(f"loaded_imagesの形状：{loaded_images.shape}")
         
         # MNISTの画像と生成した画像を結合
         mnist_images, mnist_labels = mnist_dataset.data.float(), mnist_dataset.targets
-        print(f"mnist_imagesの形状：{mnist_images.shape}")
-        print(f"mnist_images.unsqueezeの形状：{mnist_images.unsqueeze(1).shape}")
+        # print(f"mnist_imagesの形状：{mnist_images.shape}")
+        # print(f"mnist_images.unsqueezeの形状：{mnist_images.unsqueeze(1).shape}")
         combined_images = torch.cat((mnist_images.unsqueeze(1), loaded_images), 0)  # 画像を結合
-        print(f"combined_imagesの形状：{combined_images.shape}")
+        # print(f"combined_imagesの形状：{combined_images.shape}")
         combined_labels = torch.cat((mnist_labels, torch.full((numbers_of_images,), 0)))  # 生成画像のラベルを"0"とする
         # print(combined_labels[-10:])
 
 
         ##combined_imagesとcombined_labelsを保存して、wgangpで呼び出せるようにする。
-
-        # データセットを結合後のものに更新
+        #データセットを結合後のものに更新
         combined_dataset = TensorDataset(combined_images, combined_labels)
-        combined_loader = DataLoader(combined_dataset, batch_size=64, shuffle=True)    
-        
+        # combined_loader = DataLoader(combined_dataset, batch_size=64, shuffle=True)    
+        torch.save(combined_dataset, "Synthetic_Dataset.pt")
 
     # GIFアニメーションを作成
     def create_gif(in_dir, out_filename):
