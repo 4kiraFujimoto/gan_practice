@@ -179,7 +179,7 @@ batch_size = 64
 nz = 100
 noise_std = 0.7
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
+# device = torch.device("cpu")
 print(device)
 dataset = MNIST(
     root="data",
@@ -214,7 +214,7 @@ netG = Generator().to(device)
 optimD = optim.Adam(netD.parameters(), lr=0.0002)
 optimG = optim.Adam(netG.parameters(), lr=0.0002)
 
-n_epochs = 5
+n_epochs = 1
 
 
 ##画像用

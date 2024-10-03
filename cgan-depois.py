@@ -233,6 +233,7 @@ def train(dataloader, netD, netG, netL, optimD, optimG, optimL, n_epochs, write_
             write_0to9(netG)
 
     #preserve model parameter
+    #最終のエポックのパラメータを取得する。パラメタの保存はもっと考える必要あり。
     torch.save(netG, "netG_parameter")
     torch.save(netD, "netD_parameter")
     
@@ -269,7 +270,7 @@ if __name__ == "__main__":
     optimD = optim.Adam(netD.parameters(), lr=0.0002)
     optimG = optim.Adam(netG.parameters(), lr=0.0002)
     optimL = optim.Adam(netL.parameters(), lr=0.0002)
-    n_epochs = 1000
+    n_epochs = 100
 
 
     ##画像用
@@ -287,7 +288,7 @@ if __name__ == "__main__":
 
     print('初期状態')
     write_0to9(netG)
-    DO_TRAIN = True
+    DO_TRAIN = False
     if DO_TRAIN:
         mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
         
@@ -316,16 +317,16 @@ if __name__ == "__main__":
         attack_split_idx = int(0.9 * num_samples)
 
         # 最初の90%と末尾10%を分離
-        data, attack_data = data[:attack_split_idx], data[attack_split_idx:]
-        labels, attack_labels = labels[:attack_split_idx], labels[attack_split_idx:]
+        data, for_attack_data = data[:attack_split_idx], data[attack_split_idx:]
+        labels, for_attack_labels = labels[:attack_split_idx], labels[attack_split_idx:]
 
-        # 末尾10%のラベルを反転
-        attack_labels = torch.where(attack_labels == 3, 4, 3)
+        # # 末尾10%のラベルを反転
+        # attack_labels = torch.where(attack_labels == 3, 4, 3)
 
         # 最初の90%を50%と40%に分離 (40%をクリーンデータとする。)
         num_samples = len(labels)
         clean_split_idx = int(0.5 * num_samples)
-        clean_split_idx = 1
+        # clean_split_idx = 1
         
         data, clean_data = data[:clean_split_idx], data[clean_split_idx : attack_split_idx]
         labels, clean_labels = labels[:clean_split_idx], labels[clean_split_idx : attack_split_idx]
@@ -333,16 +334,16 @@ if __name__ == "__main__":
 
         _ = torch.utils.data.TensorDataset(data, labels)
         clean_dataset = torch.utils.data.TensorDataset(clean_data, clean_labels)
-        attack_dataset = torch.utils.data.TensorDataset(attack_data, attack_labels)
+        for_attack_dataset = torch.utils.data.TensorDataset(for_attack_data, for_attack_labels)
         clean_dataloader = DataLoader(clean_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-        attack_dataloader = DataLoader(attack_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+        for_attack_dataloader = DataLoader(for_attack_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
         train(clean_dataloader, netD, netG, netL, optimD, optimG, optimL, n_epochs)
         print("netD, netGのパラメータを保存しました。(ファイル名：netD_parameter, netG_parameter)")
         # write_specific_number(netG, numbers_of_images=1000, label=0)
         
     else:
-        numbers_of_images = 1000
+        numbers_of_images = 20000
         netG = torch.load("netG_parameter")
         netD = torch.load("netD_parameter")
         
@@ -362,14 +363,20 @@ if __name__ == "__main__":
         # ラベル 3 と 7 だけを抽出
         labels_to_keep = [3, 7]
         mnist_dataset = filter_mnist(mnist_dataset, labels_to_keep)
-        # test_filtered = filter_mnist(mnist_test, labels_to_keep)
+        ### test_filtered = filter_mnist(mnist_test, labels_to_keep)
+        # data = torch.stack([mnist_dataset[i][0] for i in range(len(mnist_dataset))])
+        # labels = torch.tensor([mnist_dataset[i][1] for i in range(len(mnist_dataset))])
+        # num_samples = len(labels)
+        # clean_split_idx = int(0.5 * num_samples)
+        # _, clean_data = data[:clean_split_idx], data[clean_split_idx : attack_split_idx]
+        # _, clean_labels = labels[:clean_split_idx], labels[clean_split_idx : attack_split_idx]
 
 
 
         #データ生成
         augmented_img_counter = 0
-        write_specific_number(netG, numbers_of_images=500, label=3)
-        write_specific_number(netG, numbers_of_images=500, label=7)
+        write_specific_number(netG, numbers_of_images=numbers_of_images//2, label=3)
+        write_specific_number(netG, numbers_of_images=numbers_of_images//2, label=7)
 
 
         # 保存された画像をロード
@@ -382,7 +389,13 @@ if __name__ == "__main__":
         # print(f"mnist_images.unsqueezeの形状：{mnist_images.unsqueeze(1).shape}")
         combined_images = torch.cat((mnist_images.unsqueeze(1), loaded_images), 0)  # 画像を結合
         # print(f"combined_imagesの形状：{combined_images.shape}")
-        combined_labels = torch.cat((mnist_labels, torch.full((numbers_of_images,), 0)))  # 生成画像のラベルを"0"とする
+
+        # 生成画像のラベルを3と7に設定
+        generated_labels = torch.cat((
+            torch.full((numbers_of_images//2,), 3),  # 最初の半分はラベル3
+            torch.full((numbers_of_images//2,), 7)   # 残りはラベル7
+        ))
+        combined_labels = torch.cat((mnist_labels, generated_labels), 0) # 生成画像のラベルを"0"とする
         # print(combined_labels[-10:])
 
 
@@ -406,7 +419,16 @@ if __name__ == "__main__":
         imgs[0].save(out_filename,
                     save_all=True, append_images=imgs[1:], optimize=False, duration=100, loop=0)
     
-    create_gif(in_dir='/home/fujimoto-a/research/ganpra/cgan_images', out_filename='/home/fujimoto-a/research/ganpra/cgan_images_gif/animation.gif') # GIFアニメーションを作成する関数を実行する
+    # create_gif(in_dir='/home/fujimoto-a/research/ganpra/cgan_images', out_filename='/home/fujimoto-a/research/ganpra/cgan_images_gif/animation.gif') # GIFアニメーションを作成する関数を実行する
+
+
+
+
+
+
+
+
+
 
 
     ##test lenet
