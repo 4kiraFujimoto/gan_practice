@@ -33,7 +33,7 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Dropout(0.4),
             nn.Linear(512, 1),
-            nn.Sigmoid()
+            # nn.Sigmoid()
         )
 
     def forward(self, img, label):

@@ -9,6 +9,8 @@ import faulthandler
 import os
 import numpy as np
 import torch.nn.functional as F
+from scipy import stats
+import matplotlib.pyplot as plt
 
 #Discriminatorのノイズのつけ方パターン２（depois）
 class Discriminator(nn.Module):
@@ -31,7 +33,7 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Dropout(0.4),
             nn.Linear(512, 1),
-            nn.Sigmoid()
+            # nn.Sigmoid()
         )
 
     def forward(self, img, label):
@@ -154,7 +156,7 @@ def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
             loss_real_true = critic_real_true.mean()
             gp = gradient_penalty(netD, X, fake, labels,epsilon=0.5)
             GRADIENT_PENALTY_WEIGHT = 10
-            lossD = loss_fake - loss_real_true + GRADIENT_PENALTY_WEIGHT * gp # 全ての和をとる        
+            lossD = loss_fake +loss_real_false - loss_real_true + GRADIENT_PENALTY_WEIGHT * gp # 全ての和をとる        
             lossD.backward() # 逆伝播
             optimD.step() # パラメータ更新
 
@@ -163,7 +165,8 @@ def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
             #------------------
             fake = netG(z) # 偽物を生成
             pred = netD(fake, labels) # 偽物を判定
-            lossG = criterion(pred, real_labels) # 誤差を計算
+            # lossG = criterion(pred, real_labels) # 誤差を計算
+            lossG = -pred.mean() 
             lossG.backward() # 逆伝播
             optimG.step() # パラメータ更新
 
@@ -221,8 +224,8 @@ dataloader = DataLoader(
 )
 #### n_classes = len(torch.unique(dataset.targets)) # 10
 n_classes = len(torch.unique(new_dataset.tensors[1]))  # ラベルのユニーク値を数える
-print(torch.unique(new_dataset.tensors[1]))
-print(f"n_classes = {n_classes}")
+print(f"合成データのラベルのセット = {torch.unique(new_dataset.tensors[1])}")
+print(f"合成データのラベルの数(n_classes) = {n_classes}")
 sample_x, _ = next(iter(dataloader))
 w, h = sample_x.shape[-2:]                     # (28, 28)
 image_size = w * h                             # 784
@@ -242,7 +245,7 @@ netG = Generator().to(device)
 optimD = optim.Adam(netD.parameters(), lr=0.0002)
 optimG = optim.Adam(netG.parameters(), lr=0.0002)
 
-n_epochs = 1
+n_epochs = 100
 
 
 ##画像用
@@ -257,7 +260,8 @@ else:
 img_counter = 0 # グローバルカウンタ（初期値は0）
 
 
-DO_TRAIN = True
+# DO_TRAIN = True #step2(wgan訓練)
+DO_TRAIN = False #step3(検査)
 if DO_TRAIN:
     print('初期状態')
     write(netG)
@@ -266,8 +270,96 @@ else: #検査
     # netG = torch.load("wgan_netG_parameter")
     netD = torch.load("wgan_netD_parameter")
     netD.eval()
-    critic_preds 
+    critic_validities = []
     for X, labels in dataloader:
         X = X.to(device)
         labels = labels.to(device) 
-        critic_pred = netD(X, labels)
+        critic_validity = netD(X, labels)
+        critic_validities.append(critic_validity.view(-1).detach().cpu().numpy())
+
+    critic_validities = np.concatenate(critic_validities)
+    # ヒストグラムのプロット
+    plt.hist(critic_validities, bins=30, alpha=0.75, color='blue')
+    plt.title('Histogram of Validity Outputs')
+    plt.xlabel('Validity')
+    plt.ylabel('Frequency')
+    plt.savefig("validity_hist.png") 
+
+
+
+
+    ###攻撃作成###
+    mnist_dataset = MNIST(root="./data", train=True, download=False, transform=transforms.ToTensor())
+    # 3と7だけをフィルタリング
+    def filter_mnist(dataset, labels_to_keep):
+        indices = torch.where(torch.isin(dataset.targets, torch.tensor(labels_to_keep)))[0] #torch.where(condition) is identical to torch.nonzero(condition, as_tuple=True).
+        filtered_data = torch.utils.data.Subset(dataset, indices)
+        return filtered_data
+    # ラベル 3 と 7 だけを抽出
+    # labels_to_keep = [0,1,2,3,4,5 ]
+    labels_to_keep = [3,7]
+    mnist_dataset = filter_mnist(mnist_dataset, labels_to_keep)
+    # サブセットからデータとラベルを取得
+    data = torch.stack([mnist_dataset[i][0] for i in range(len(mnist_dataset))])
+    labels = torch.tensor([mnist_dataset[i][1] for i in range(len(mnist_dataset))])
+    # データとラベルをシャッフル
+    perm = torch.randperm(len(data))
+    data = data[perm]
+    labels = labels[perm]
+    attack_dataset = torch.utils.data.TensorDataset(data, labels)
+    attatck_images, attack_labels = attack_dataset.tensors
+    # ラベルを3を0に、7を1に変換する #これをやらないと、make_noiseのlabels = eye[labels].to(device)でエラー
+    replace_attack_labels = attack_labels.clone()  # 元のラベルをコピー
+    replace_attack_labels[attack_labels == 3] = 1  # 3を0に変換
+    replace_attack_labels[attack_labels == 7] = 0  # 7を1に変換
+    # 新しいデータセットを作成
+    attack_dataset = TensorDataset(attatck_images, replace_attack_labels)
+    attack_dataloader = DataLoader(
+        attack_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True
+    )
+    netD.eval()
+    attack_critic_validities = []
+    for X, labels in attack_dataloader:
+        X = X.to(device)
+        labels = labels.to(device) 
+        critic_validity = netD(X, labels)
+        attack_critic_validities.append(critic_validity.view(-1).detach().cpu().numpy())
+    attack_critic_validities = np.concatenate(attack_critic_validities)
+
+    # ヒストグラムのプロット
+    plt.figure(figsize=(10, 6))
+    # plt.hist(critic_validities, bins=30, color='blue', alpha=0.5, label='Critic Validities')
+    plt.hist(attack_critic_validities, bins=30, color='red', alpha=0.5, label='Attack Critic Validities')
+    # グラフの装飾
+    plt.title('Histogram of Critic Validities')
+    plt.xlabel('Validity')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid()
+    plt.savefig("validity_attack.png") 
+
+    # ヒストグラムのプロット
+    plt.figure(figsize=(10, 6))
+    plt.hist(critic_validities, bins=30, color='blue', alpha=0.5, label='Critic Validities')
+    plt.hist(attack_critic_validities, bins=30, color='red', alpha=0.5, label='Attack Critic Validities')
+    # グラフの装飾
+    plt.title('Histogram of Critic Validities')
+    plt.xlabel('Validity')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid()
+    plt.savefig("validity_comparison.png") 
+
+
+    ##正規分布を仮定した際の下位5%の閾値計算
+    # validityの平均と標準偏差を計算
+    mean_validity = np.mean(critic_validities)
+    std_validity = np.std(critic_validities)
+
+    # 下位5%に相当する閾値を計算
+    threshold_5_percent = stats.norm.ppf(0.05, loc=mean_validity, scale=std_validity)
+
+    print(f"下位5%に相当する閾値: {threshold_5_percent}")
