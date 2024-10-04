@@ -403,7 +403,15 @@ if __name__ == "__main__":
         #データセットを結合後のものに更新
         combined_dataset = TensorDataset(combined_images, combined_labels)
         # combined_loader = DataLoader(combined_dataset, batch_size=64, shuffle=True)    
+        
+        print(type(combined_labels))
+        combined_labels = combined_labels.long()
+        print(torch.unique(combined_labels))  # ユニークなラベル値を確認
+
+        #生成したデータセットをセーブ
         torch.save(combined_dataset, "Synthetic_Dataset.pt")
+        
+
 
     # GIFアニメーションを作成
     def create_gif(in_dir, out_filename):

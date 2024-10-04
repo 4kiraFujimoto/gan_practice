@@ -1,6 +1,6 @@
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 import torchvision
 from torchvision.datasets import MNIST
 from torchvision import transforms
@@ -139,6 +139,7 @@ def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
             # Discriminatorの学習
             #--------------------- 
             z = make_noise(labels) # ノイズを生成
+            # print(z.shape)  
             fake = netG(z) # 偽物を生成       
             critic_fake = netD(fake, labels) # 偽物を判定
             critic_real_true = netD(X, labels) # 本物&正しいラベルを判定
@@ -170,6 +171,10 @@ def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
         if write_interval and epoch % write_interval == 0:
             write(netG)
 
+    #最終のエポックのパラメータを取得する。パラメタの保存はもっと考える必要あり。
+    torch.save(netG, "wgan_netG_parameter")
+    torch.save(netD, "wgan_netD_parameter")
+
 
 
 ##main関数###
@@ -181,27 +186,50 @@ noise_std = 0.7
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = torch.device("cpu")
 print(device)
-dataset = MNIST(
-    root="data",
-    train=True,
-    download=True,
-    transform=transforms.ToTensor()
-)
+#### dataset = MNIST(
+#     root="data",
+#     train=True,
+#     download=True,
+#     transform=transforms.ToTensor()
+# )
 
+#### dataloader = DataLoader(
+#     dataset,
+#     batch_size=batch_size,
+#     shuffle=True,
+#     drop_last=True
+# )
+
+# 生成したデータセットのロード
+synthetic_dataset = torch.load("Synthetic_Dataset.pt")
+
+# synthetic_datasetはTensorDataset
+images, labels = synthetic_dataset.tensors
+# ラベルを3を0に、7を1に変換する #これをやらないと、make_noiseのlabels = eye[labels].to(device)でエラー
+replace_labels = labels.clone()  # 元のラベルをコピー
+replace_labels[labels == 3] = 0  # 3を0に変換
+replace_labels[labels == 7] = 1  # 7を1に変換
+# 新しいデータセットを作成
+new_dataset = TensorDataset(images, replace_labels)
+
+# データローダーの作成
 dataloader = DataLoader(
-    dataset,
+    new_dataset,
     batch_size=batch_size,
     shuffle=True,
     drop_last=True
 )
-
+#### n_classes = len(torch.unique(dataset.targets)) # 10
+n_classes = len(torch.unique(new_dataset.tensors[1]))  # ラベルのユニーク値を数える
+print(torch.unique(new_dataset.tensors[1]))
+print(f"n_classes = {n_classes}")
 sample_x, _ = next(iter(dataloader))
-n_classes = len(torch.unique(dataset.targets)) # 10
 w, h = sample_x.shape[-2:]                     # (28, 28)
 image_size = w * h                             # 784
 
-
+# n_classes =10
 eye = torch.eye(n_classes, device=device)
+# z = make_noise(torch.tensor([3, 7], device=device))
 
 
 fake_labels = torch.zeros(batch_size, 1).to(device) # 偽物のラベル
@@ -229,6 +257,17 @@ else:
 img_counter = 0 # グローバルカウンタ（初期値は0）
 
 
-print('初期状態')
-write(netG)
-train(netD, netG, optimD, optimG, n_epochs)
+DO_TRAIN = True
+if DO_TRAIN:
+    print('初期状態')
+    write(netG)
+    train(netD, netG, optimD, optimG, n_epochs)
+else: #検査
+    # netG = torch.load("wgan_netG_parameter")
+    netD = torch.load("wgan_netD_parameter")
+    netD.eval()
+    critic_preds 
+    for X, labels in dataloader:
+        X = X.to(device)
+        labels = labels.to(device) 
+        critic_pred = netD(X, labels)
