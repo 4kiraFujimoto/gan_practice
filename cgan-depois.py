@@ -12,95 +12,146 @@ import torch.nn.functional as F
 import glob
 from PIL import Image
 
-#Discriminatorのノイズのつけ方パターン２（depois）
+# #Discriminatorのノイズのつけ方パターン２（depois）
+# class Discriminator(nn.Module):
+#     def __init__(self, img_shape, num_classes):
+#         super(Discriminator, self).__init__()
+#         self.img_shape = img_shape
+#         self.num_classes = num_classes
+
+#         # ラベル埋め込みの定義
+#         self.label_embedding = nn.Embedding(num_classes, int(np.prod(img_shape))) #10->784
+
+#         # 連結された入力を扱うMLP
+#         self.net = nn.Sequential(
+#             nn.Linear(int(np.prod(img_shape)), 512),
+#             nn.LeakyReLU(0.2),
+#             nn.Linear(512, 512),
+#             nn.LeakyReLU(0.2),
+#             nn.Dropout(0.4),
+#             nn.Linear(512, 512),
+#             nn.LeakyReLU(0.2),
+#             nn.Dropout(0.4),
+#             nn.Linear(512, 1),
+#             # nn.Sigmoid()
+#         )
+
+#     def forward(self, img, label):
+#         label_embedding = self.label_embedding(label) # ラベルの埋め込みを取得
+#         label_embedding = label_embedding.view(label_embedding.size(0), -1)
+#         flat_img = img.view(img.size(0), -1) # 画像の平坦化
+#         model_input = flat_img * label_embedding # 画像とラベル埋め込みの要素ごとの積
+#         validity = self.net(model_input) # 判別器モデルを通す
+#         return validity
+
 class Discriminator(nn.Module):
     def __init__(self, img_shape, num_classes):
         super(Discriminator, self).__init__()
         self.img_shape = img_shape
         self.num_classes = num_classes
+        channels, height, width = self.img_shape  # 画像のチャンネル数、サイズを取得
 
         # ラベル埋め込みの定義
-        self.label_embedding = nn.Embedding(num_classes, int(np.prod(img_shape))) #10->784
+        self.label_embedding = nn.Embedding(num_classes, height * width)
 
-        # 連結された入力を扱うMLP
-        self.net = nn.Sequential(
-            nn.Linear(int(np.prod(img_shape)), 512),
-            nn.LeakyReLU(0.2),
-            nn.Linear(512, 512),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(0.4),
-            nn.Linear(512, 512),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(0.4),
-            nn.Linear(512, 1),
-            # nn.Sigmoid()
-        )
+        # 畳み込み層
+        self.conv1 = nn.Conv2d(channels + 1, 64, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
+
+        # バッチ正規化
+        self.bn1 = nn.BatchNorm2d(64)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.bn3 = nn.BatchNorm2d(256)
+
+        # 最終の全結合層
+        self.fc = nn.Linear(4096, 1)  # 全結合層の入力次元を4096に修正
 
     def forward(self, img, label):
-        label_embedding = self.label_embedding(label) # ラベルの埋め込みを取得
-        label_embedding = label_embedding.view(label_embedding.size(0), -1)
-        flat_img = img.view(img.size(0), -1) # 画像の平坦化
-        model_input = flat_img * label_embedding # 画像とラベル埋め込みの要素ごとの積
-        validity = self.net(model_input) # 判別器モデルを通す
+        # ラベルを埋め込みベクトルに変換
+        label_embedding = self.label_embedding(label).view(label.size(0), 1, self.img_shape[1], self.img_shape[2])
+
+        # 画像とラベルを結合（チャネル方向に結合）
+        d_in = torch.cat((img, label_embedding), dim=1)
+
+        # 畳み込み層の適用
+        x = F.leaky_relu(self.bn1(self.conv1(d_in)), 0.2)
+        x = F.leaky_relu(self.bn2(self.conv2(x)), 0.2)
+        x = F.leaky_relu(self.bn3(self.conv3(x)), 0.2)
+
+        # 出力のサイズを確認
+        # print(f"Conv output size: {x.size()}")  # ここで出力サイズを確認
+
+        # 平坦化して全結合層へ
+        x = x.view(x.size(0), -1)  # バッチサイズに従って平坦化
+        # print(x.shape)  # 平坦化後のサイズを確認
+        validity = self.fc(x)
+        validity = torch.sigmoid(validity)  
+
         return validity
 
 
 
-class Generator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Sequential(
-            self._linear(nz, 256),
-            self._linear(256, 512),
-            self._linear(512, 1024),
-            nn.Linear(1024, image_size),
-            # nn.Tanh()
-            nn.Sigmoid()
-        )
-
-    def _linear(self, input_size, output_size):
-        return nn.Sequential(
-            nn.Linear(input_size, output_size),
-            nn.BatchNorm1d(output_size,momentum=0.8),
-            nn.ReLU(0.2)
-        )
-
-    def forward(self, x):
-        x = x.view(-1, nz)
-        y = self.net(x)
-        y = y.view(-1, 1, w, h) # 784 -> 1x28x28
-        return y
-
-
-# class LeNet(nn.Module):
+# class Generator(nn.Module):
 #     def __init__(self):
-#         super(LeNet, self).__init__()
+#         super().__init__()
 #         self.net = nn.Sequential(
-#             # 第一の畳み込み層、ReLU活性化、最大プーリング
-#             nn.Conv2d(in_channels=1, out_channels=20, kernel_size=5, padding=2),
-#             nn.ReLU(),
-#             nn.MaxPool2d(kernel_size=2, stride=2),
+#             self._linear(nz, 256),
+#             self._linear(256, 512),
+#             self._linear(512, 1024),
+#             nn.Linear(1024, image_size),
+#             # nn.Tanh()
+#             nn.Sigmoid()
+#         )
 
-#             # 第二の畳み込み層、ReLU活性化、最大プーリング
-#             nn.Conv2d(in_channels=20, out_channels=50, kernel_size=5, padding=2),
-#             nn.ReLU(),
-#             nn.MaxPool2d(kernel_size=2, stride=2),
-
-#             # Flatten層（Sequential内でのFlattenはできないため、次の全結合層で行う）
-#             nn.Flatten(),
-
-#             # 全結合層、ReLU活性化
-#             nn.Linear(50 * 7 * 7, 500),
-#             nn.ReLU(),
-
-#             # 出力層（ソフトマックスはこの後の損失関数で適用）
-#             nn.Linear(500, 10)
+#     def _linear(self, input_size, output_size):
+#         return nn.Sequential(
+#             nn.Linear(input_size, output_size),
+#             nn.BatchNorm1d(output_size,momentum=0.8),
+#             nn.ReLU(0.2)
 #         )
 
 #     def forward(self, x):
+#         x = x.view(-1, nz)
 #         y = self.net(x)
-#         # y = y.view(-1,10)
+#         y = y.view(-1, 1, w, h) # 784 -> 1x28x28
 #         return y
+
+class Generator(nn.Module):
+    def __init__(self, nz, img_shape):
+        super(Generator, self).__init__()
+        self.nz = nz  # 潜在変数の次元数
+        self.img_shape = img_shape  # 画像の形状 (channels, height, width)
+
+        # 全結合層で特徴抽出
+        self.fc = nn.Sequential(
+            nn.Linear(self.nz, 128 * (img_shape[1] // 4) * (img_shape[2] // 4)),
+            nn.BatchNorm1d(128 * (img_shape[1] // 4) * (img_shape[2] // 4)),
+            nn.ReLU(True)
+        )
+
+        # 畳み込み層
+        self.conv_blocks = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # 2倍のサイズに拡張
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),   # さらに2倍のサイズに拡張
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.Conv2d(32, img_shape[0], kernel_size=3, stride=1, padding=1),  # チャンネル数を画像のチャンネル数に変換
+            nn.Sigmoid()  # 出力を0から1に正規化
+        )
+
+    def forward(self, z):
+        # 全結合層で特徴量を生成し、4次元テンソルに変換
+        out = self.fc(z)
+        out = out.view(out.size(0), 128, self.img_shape[1] // 4, self.img_shape[2] // 4)
+
+        # 畳み込み層で画像生成
+        img = self.conv_blocks(out)
+        return img
+
+
 class LeNet(nn.Module):
     def __init__(self):
         super(LeNet, self).__init__()
@@ -263,9 +314,10 @@ if __name__ == "__main__":
     fake_labels = torch.zeros(batch_size, 1).to(device) # 偽物のラベル
     real_labels = torch.ones(batch_size, 1).to(device) # 本物のラベル
     criterion = nn.BCELoss() # バイナリ交差エントロピー BCEと違って、CrossEntropyLossは内部でsigmoid関数がかけられるので、生データそのまま入れれる。
-
-    netD = Discriminator(img_shape=784, num_classes=10).to(device)
-    netG = Generator().to(device)
+    img_shape=(1,28,28)
+    # netD = Discriminator(img_shape=784, num_classes=10).to(device)
+    netD = Discriminator(img_shape=(1,28,28), num_classes=10).to(device)
+    netG = Generator(nz,img_shape=(1,28,28)).to(device)
     netL = LeNet().to(device) #authenticator
     optimD = optim.Adam(netD.parameters(), lr=0.0002)
     optimG = optim.Adam(netG.parameters(), lr=0.0002)
