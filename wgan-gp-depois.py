@@ -160,18 +160,31 @@ def make_noise(labels):
     z = z + labels
     return z
 
+# # 画像描画
+# def write(netG, n_rows=1, size=64):
+#     global img_counter
+#     n_images = n_rows * n_classes
+#     z = make_noise(torch.tensor(list(range(n_classes)) * n_rows))
+#     images = netG(z)
+#     images = transforms.Resize(size)(images)
+#     img = torchvision.utils.make_grid(images, n_images // n_rows)
+#     img = transforms.functional.to_pil_image(img)
+    
+#     file_path = f"/home/fujimoto-a/research/ganpra/wgan_images/wgan{img_counter}.jpg"
+#     img.save(file_path)
+#     img_counter += 1
 # 画像描画
 def write(netG, n_rows=1, size=64):
     global img_counter
     n_images = n_rows * n_classes
-    z = make_noise(torch.tensor(list(range(n_classes)) * n_rows))
-    images = netG(z)
-    images = transforms.Resize(size)(images)
-    img = torchvision.utils.make_grid(images, n_images // n_rows)
-    img = transforms.functional.to_pil_image(img)
-    
+    z = make_noise(torch.tensor(list(range(n_classes)) * n_rows)).to(device)
+    with torch.no_grad():
+        images = netG(z)
+    from torchvision.utils import save_image
+    from torchvision.utils import make_grid
+    grid_img = make_grid(images,nrow=10)
     file_path = f"/home/fujimoto-a/research/ganpra/wgan_images/wgan{img_counter}.jpg"
-    img.save(file_path)
+    save_image(grid_img, fp=file_path)
     img_counter += 1
 
 # 間違ったラベルの生成
@@ -180,15 +193,16 @@ def make_false_labels(labels):
     fake_labels = (labels + diff) % n_classes
     return fake_labels
 
-def gradient_penalty(netD, real_images, fake_images, labels, epsilon=0.5):
+def gradient_penalty(netD, real_images, fake_images, labels):
+        epsilon = torch.rand(real_images.size(0), 1, 1, 1, device=real_images.device)
         interpolates = epsilon * real_images + (1 - epsilon) * fake_images
-        interpolates.requires_grad_(True)
+        interpolates = interpolates.requires_grad_(True)
 
         critic_interpolates = netD(interpolates,labels)
         gradients = torch.autograd.grad(
             outputs=critic_interpolates,
             inputs=interpolates,
-            grad_outputs=torch.ones(critic_interpolates.size()).to(real_images.device),
+            grad_outputs=torch.ones(critic_interpolates.size(), requires_grad=False).to(real_images.device),
             create_graph=True,
             retain_graph=True,
             only_inputs=True
@@ -197,8 +211,6 @@ def gradient_penalty(netD, real_images, fake_images, labels, epsilon=0.5):
         gradients = gradients.view(gradients.size(0), -1)
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         return gradient_penalty
-    
-
 def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
     # 学習モード
     
@@ -212,7 +224,7 @@ def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
             # print(X.shape)
             # print(labels.shape)
             labels = labels.to(device) # 正しいラベル
-            false_labels = make_false_labels(labels) # 間違ったラベル
+            # false_labels = make_false_labels(labels) # 間違ったラベル
 
             # 勾配をリセット
             optimD.zero_grad()
@@ -223,27 +235,28 @@ def train(netD, netG, optimD, optimG, n_epochs, write_interval=1):
             #--------------------- 
             z = make_noise(labels) # ノイズを生成
             # print(z.shape)  
-            fake = netG(z) # 偽物を生成       
+            fake = netG(z).detach() # 偽物を生成       
             critic_fake = netD(fake, labels) # 偽物を判定
             critic_real_true = netD(X, labels) # 本物&正しいラベルを判定
-            critic_real_false = netD(X, false_labels) # 本物&間違ったラベルを判定
+            # critic_real_false = netD(X, false_labels) # 本物&間違ったラベルを判定
 
             # 誤差を計算
             # loss_fake = criterion(pred_fake, fake_labels)
             # loss_real_true = criterion(pred_real_true, real_labels)
             # loss_real_false = criterion(pred_real_false, fake_labels)
             loss_fake = critic_fake.mean()
-            loss_real_false = critic_real_false.mean()
+            # loss_real_false = critic_real_false.mean()
             loss_real_true = critic_real_true.mean()
-            gp = gradient_penalty(netD, X, fake, labels,epsilon=0.5)
+            gp = gradient_penalty(netD, X, fake, labels)
             GRADIENT_PENALTY_WEIGHT = 10
-            lossD = loss_fake +loss_real_false - loss_real_true + GRADIENT_PENALTY_WEIGHT * gp # 全ての和をとる        
+            lossD = loss_fake - loss_real_true + GRADIENT_PENALTY_WEIGHT * gp #+loss_real_false # 全ての和をとる        
             lossD.backward() # 逆伝播
             optimD.step() # パラメータ更新
 
             #------------------
             # Generatorの学習
             #------------------
+            optimG.zero_grad()
             fake = netG(z) # 偽物を生成
             pred = netD(fake, labels) # 偽物を判定
             # lossG = criterion(pred, real_labels) # 誤差を計算
@@ -270,32 +283,32 @@ noise_std = 0.7
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # device = torch.device("cpu")
 print(device)
-#### dataset = MNIST(
+# dataset = MNIST(
 #     root="data",
 #     train=True,
 #     download=True,
 #     transform=transforms.ToTensor()
 # )
 
-#### dataloader = DataLoader(
+# dataloader = DataLoader(
 #     dataset,
 #     batch_size=batch_size,
 #     shuffle=True,
 #     drop_last=True
 # )
 
+
 # 生成したデータセットのロード
 synthetic_dataset = torch.load("Synthetic_Dataset.pt")
-
 # synthetic_datasetはTensorDataset
 images, labels = synthetic_dataset.tensors
+images = images/255.0
 # ラベルを3を0に、7を1に変換する #これをやらないと、make_noiseのlabels = eye[labels].to(device)でエラー
 replace_labels = labels.clone()  # 元のラベルをコピー
 replace_labels[labels == 3] = 0  # 3を0に変換
 replace_labels[labels == 7] = 1  # 7を1に変換
 # 新しいデータセットを作成
 new_dataset = TensorDataset(images, replace_labels)
-
 # データローダーの作成
 dataloader = DataLoader(
     new_dataset,
@@ -303,13 +316,16 @@ dataloader = DataLoader(
     shuffle=True,
     drop_last=True
 )
-#### n_classes = len(torch.unique(dataset.targets)) # 10
+
+# n_classes = len(torch.unique(dataset.targets)) # 10
 n_classes = len(torch.unique(new_dataset.tensors[1]))  # ラベルのユニーク値を数える
 print(f"合成データのラベルのセット = {torch.unique(new_dataset.tensors[1])}")
 print(f"合成データのラベルの数(n_classes) = {n_classes}")
 sample_x, _ = next(iter(dataloader))
 w, h = sample_x.shape[-2:]                     # (28, 28)
 image_size = w * h                             # 784
+# print(sample_x.max())
+# print(sample_x.min())
 
 # n_classes =10
 eye = torch.eye(n_classes, device=device)
@@ -318,18 +334,20 @@ eye = torch.eye(n_classes, device=device)
 
 fake_labels = torch.zeros(batch_size, 1).to(device) # 偽物のラベル
 real_labels = torch.ones(batch_size, 1).to(device) # 本物のラベル
-criterion = nn.BCELoss() # バイナリ交差エントロピー BCEと違って、CrossEntropyLossは内部でsigmoid関数がかけられるので、生データそのまま入れれる。
+# criterion = nn.BCELoss() # バイナリ交差エントロピー BCEと違って、CrossEntropyLossは内部でsigmoid関数がかけられるので、生データそのまま入れれる。
 
 
 # netD = Discriminator(img_shape=784, num_classes=10).to(device)
 # netG = Generator().to(device)
+# img_shape=784
 img_shape=(1,28,28)
-netD = Discriminator(img_shape=(1,28,28), num_classes=2).to(device)
-netG = Generator(nz,img_shape=(1,28,28)).to(device)
+num_classes=n_classes
+netD = Discriminator(img_shape=img_shape, num_classes=n_classes).to(device)
+netG = Generator(nz, img_shape=(1,28,28)).to(device)
 optimD = optim.Adam(netD.parameters(), lr=0.0002)
 optimG = optim.Adam(netG.parameters(), lr=0.0002)
 
-n_epochs = 100
+n_epochs = 30
 
 
 ##画像用
